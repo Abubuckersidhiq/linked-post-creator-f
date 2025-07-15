@@ -1,4 +1,5 @@
 "use client";
+import jwt_decode from "jwt-decode";
 import React, { useState, useRef, useEffect } from "react";
 
 const User = ({ className }) => (
@@ -213,6 +214,7 @@ export default function ProfileBuilder() {
   const [skillInput, setSkillInput] = useState("");
   const [skillSuggestions, setSkillSuggestions] = useState([]);
   const skillInputRef = useRef(null);
+  const [linkedInUser, setLinkedInUser] = useState(null);
 
   // Validation function
   const validateForm = () => {
@@ -277,6 +279,32 @@ export default function ProfileBuilder() {
   };
 
   useEffect(() => {
+    // LinkedIn id_token handling
+    const params = new URLSearchParams(window.location.search);
+    const idToken = params.get("id_token");
+    if (idToken) {
+      localStorage.setItem("linkedin_id_token", idToken);
+      try {
+        const user = jwt_decode(idToken);
+        setLinkedInUser(user);
+      } catch (e) {
+        setLinkedInUser(null);
+      }
+      // Clean up URL
+      window.history.replaceState({}, document.title, window.location.pathname);
+    } else {
+      // Try to load from localStorage if already present
+      const stored = localStorage.getItem("linkedin_id_token");
+      if (stored) {
+        try {
+          const user = jwt_decode(stored);
+          setLinkedInUser(user);
+        } catch (e) {
+          setLinkedInUser(null);
+        }
+      }
+    }
+
     if (window.location.search.includes("linkedin=success")) {
       fetch("http://localhost:3000/linkedin/profile")
         .then((res) => res.json())
@@ -398,6 +426,11 @@ export default function ProfileBuilder() {
             Create a compelling LinkedIn profile that stands out. Get discovered
             by recruiters and grow your professional network.
           </p>
+          {linkedInUser && (
+            <div className="mt-4 text-lg text-emerald-700 font-semibold">
+              Connected as: {linkedInUser.name || linkedInUser.email || linkedInUser.sub}
+            </div>
+          )}
         </div>
 
         {/* Main Content */}
@@ -409,7 +442,9 @@ export default function ProfileBuilder() {
               <div className="flex items-center gap-4 mb-4">
                 <button
                   className="flex items-center gap-3 bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white px-6 py-3 rounded-xl font-semibold shadow-lg transition-all duration-300 transform hover:scale-105"
-                  onClick={() => setLinkedinLoaded(true)}
+                  onClick={() => {
+                    window.location.href = "http://localhost:3000/auth/linkedin";
+                  }}
                   type="button"
                 >
                   <Linkedin className="w-5 h-5" />
