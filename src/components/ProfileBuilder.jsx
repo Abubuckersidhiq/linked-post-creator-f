@@ -1,5 +1,5 @@
 "use client";
-import jwt_decode from "jwt-decode";
+import { jwtDecode } from "jwt-decode";
 import React, { useState, useRef, useEffect } from "react";
 
 const User = ({ className }) => (
@@ -214,7 +214,30 @@ export default function ProfileBuilder() {
   const [skillInput, setSkillInput] = useState("");
   const [skillSuggestions, setSkillSuggestions] = useState([]);
   const skillInputRef = useRef(null);
-  const [linkedInUser, setLinkedInUser] = useState(null);
+  const [linkedInUser, setLinkedInUser] = useState(null); // This will store decoded id_token claims
+  const [linkedInProfile, setLinkedInProfile] = useState(null); // Store full LinkedIn profile
+  const [postMessage, setPostMessage] = useState(`🚀 Excited to share an early preview of **MultiPost AI** – an open-source, AI-powered post creation and publishing tool!
+
+We're building MultiPost AI to help professionals easily generate and publish optimized posts across platforms like LinkedIn (with more to come: Indeed, Naukri, Instagram, Meta, and more).
+
+✨ **What makes us different?**
+- Built with LangChain and LangGraph for flexible, powerful AI workflows.
+- Modern, privacy-friendly frontend using Next.js – **we do NOT store any user data**.
+- User-friendly interface: edit images, captions, and posts with ease.
+- 100% open source – we welcome feedback, ideas, and contributors!
+
+🔗 Check out our progress and join us on GitHub:
+- Backend: https://github.com/Abubuckersidhiq/linked-in-post-creator-b
+- Frontend: https://github.com/Abubuckersidhiq/linked-post-creator-f
+
+We're just getting started and your feedback or contributions would mean a lot. Try it out, star the repo, or open an issue/PR!
+
+#OpenSource #AI #NextJS #LangChain #LangGraph #MultiPostAI #BuildInPublic
+
+_Posted using MultiPost AI – the open-source AI post creator!_`);
+  const [sharingLoading, setSharingLoading] = useState(false);
+  const [shareSuccess, setShareSuccess] = useState(false);
+  const [shareError, setShareError] = useState("");
 
   // Validation function
   const validateForm = () => {
@@ -279,48 +302,68 @@ export default function ProfileBuilder() {
   };
 
   useEffect(() => {
-    // LinkedIn id_token handling
     const params = new URLSearchParams(window.location.search);
-    const idToken = params.get("id_token");
-    if (idToken) {
-      localStorage.setItem("linkedin_id_token", idToken);
-      try {
-        const user = jwt_decode(idToken);
-        setLinkedInUser(user);
-      } catch (e) {
-        setLinkedInUser(null);
-      }
-      // Clean up URL
+    const idTokenFromUrl = params.get("id_token");
+
+    // Clear id_token from URL immediately to prevent re-processing on refresh
+    if (idTokenFromUrl) {
       window.history.replaceState({}, document.title, window.location.pathname);
-    } else {
-      // Try to load from localStorage if already present
-      const stored = localStorage.getItem("linkedin_id_token");
-      if (stored) {
-        try {
-          const user = jwt_decode(stored);
-          setLinkedInUser(user);
-        } catch (e) {
-          setLinkedInUser(null);
-        }
-      }
     }
 
-    if (window.location.search.includes("linkedin=success")) {
-      fetch("http://localhost:3000/linkedin/profile")
-        .then((res) => res.json())
-        .then((profile) => {
-          setForm((f) => ({
-            ...f,
-            name: [profile.localizedFirstName, profile.localizedLastName]
-              .filter(Boolean)
-              .join(" "),
-            education: profile.headline || "",
-          }));
-          setLinkedinLoaded(true);
-        })
-        .catch(() => setError("Failed to load LinkedIn profile."));
+    let currentIdToken = localStorage.getItem("linkedin_id_token");
+
+    // If we just got a new id_token from the URL, save it
+    if (idTokenFromUrl) {
+      localStorage.setItem("linkedin_id_token", idTokenFromUrl);
+      currentIdToken = idTokenFromUrl;
     }
-  }, []);
+
+    if (currentIdToken) {
+      try {
+        const userClaims = jwtDecode(currentIdToken)
+        setLinkedInUser(userClaims); // Set the decoded claims
+
+        // Now, attempt to fetch the full profile from your backend
+        fetch("http://localhost:3000/api/linkedin/profile", {
+          credentials: 'include' // Important for sending cookies
+        })
+          .then((res) => {
+            if (!res.ok) {
+              if (res.status === 401) {
+                localStorage.removeItem("linkedin_id_token");
+                setLinkedInUser(null);
+                setLinkedinLoaded(false);
+                setError("Your LinkedIn session has expired. Please reconnect.");
+              }
+              throw new Error('Failed to load LinkedIn profile from backend.');
+            }
+            return res.json();
+          })
+          .then((profile) => {
+            setLinkedInProfile(profile); // Save full profile for picture, etc.
+            setForm((f) => ({
+              ...f,
+              name: profile.fullName || [profile.firstName, profile.lastName].filter(Boolean).join(" ") || profile.email || "",
+              education: f.education || "", // Education is not available from LinkedIn OIDC, keep as is
+            }));
+            setLinkedinLoaded(true);
+            setError("");
+          })
+          .catch((err) => {
+            console.error("Error fetching LinkedIn profile from backend:", err);
+            if (!error) {
+                setError("Failed to load LinkedIn profile. Please try reconnecting.");
+            }
+          });
+
+      } catch (e) {
+        console.error("Error decoding id_token or processing LinkedIn data:", e);
+        setLinkedInUser(null);
+        localStorage.removeItem("linkedin_id_token");
+        setError("Invalid LinkedIn token. Please reconnect.");
+      }
+    }
+  }, []); // Run once on component mount
 
   // Handle skill input changes and suggestions
   const handleSkillInputChange = (e) => {
@@ -385,21 +428,88 @@ export default function ProfileBuilder() {
     setError("");
 
     try {
-           const res = await fetch("http://localhost:3000/profile", {
-             method: "POST",
-             headers: { "Content-Type": "application/json" },
-             body: JSON.stringify({
-               ...form,
-               skills: form.skills.join(", "),
-             }),
-           });
-           const data = await res.json();
+      const res = await fetch("http://localhost:3000/profile", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...form,
+          skills: form.skills.join(", "),
+        }),
+      });
+      const data = await res.json();
 
       setSummary(data.summary);
     } catch (err) {
       setError("Failed to generate profile. Please try again.");
     }
     setLoading(false);
+  };
+
+  const handleLogout = async () => {
+    try {
+      await fetch("http://localhost:3000/api/logout", {
+        method: "POST",
+        credentials: 'include'
+      });
+      setLinkedInUser(null);
+      setLinkedinLoaded(false);
+      localStorage.removeItem("linkedin_id_token");
+      setForm({ // Reset form too
+        name: "",
+        education: "",
+        skills: [],
+        experience: "",
+        goals: "",
+      });
+      setSummary("");
+      setError("");
+    } catch (err) {
+      console.error("Logout failed:", err);
+      setError("Failed to log out. Please try again.");
+    }
+  };
+
+  // New function to handle sharing the post to LinkedIn
+  const handleShareLinkedIn = async () => {
+    if (!linkedInUser) {
+      setShareError("Not connected to LinkedIn.");
+      return;
+    }
+    if (!postMessage.trim()) {
+      setShareError("Post message cannot be empty.");
+      return;
+    }
+
+    setSharingLoading(true);
+    setShareError("");
+    setShareSuccess(false);
+
+    try {
+      const response = await fetch("http://localhost:3000/api/linkedin/share", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ message: postMessage }),
+        credentials: 'include' // Important for sending the sessionId cookie
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || "Failed to share post.");
+      }
+
+      const data = await response.json();
+      setShareSuccess(true);
+      // Optionally, reset message or provide user feedback
+      setTimeout(() => setShareSuccess(false), 3000); // Clear success message after 3 seconds
+
+    } catch (err) {
+      console.error("Error sharing to LinkedIn:", err);
+      setShareError(err.message || "An unexpected error occurred while sharing.");
+    } finally {
+      setSharingLoading(false);
+    }
   };
 
   return (
@@ -426,10 +536,31 @@ export default function ProfileBuilder() {
             Create a compelling LinkedIn profile that stands out. Get discovered
             by recruiters and grow your professional network.
           </p>
+          {/* Show profile picture and greeting if connected */}
+          {linkedInUser && linkedInProfile && linkedInProfile.profilePicture && (
+            <div className="flex flex-col items-center justify-center mt-4">
+              <img src={linkedInProfile.profilePicture} alt="Profile" className="w-20 h-20 rounded-full border-4 border-blue-400 shadow-lg mb-2" />
+            </div>
+          )}
+          {/* Personalized greeting */}
           {linkedInUser && (
-            <div className="mt-4 text-lg text-emerald-700 font-semibold">
+            <div className="mt-4 text-2xl text-blue-700 font-bold animate-fade-in-up">
+              Hey {linkedInUser.given_name || linkedInUser.name || linkedInUser.email || linkedInUser.sub}, Get Ready to make your profile
+            </div>
+          )}
+          {/* Show connected as info below greeting for clarity */}
+          {linkedInUser && (
+            <div className="mt-2 text-lg text-emerald-700 font-semibold">
               Connected as: {linkedInUser.name || linkedInUser.email || linkedInUser.sub}
             </div>
+          )}
+          {linkedInUser && (
+            <button
+              onClick={handleLogout}
+              className="mt-4 flex items-center gap-2 bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-xl font-semibold shadow-md transition-all duration-300 mx-auto"
+            >
+              Logout LinkedIn
+            </button>
           )}
         </div>
 
@@ -437,27 +568,82 @@ export default function ProfileBuilder() {
         <div className="grid lg:grid-cols-2 gap-8 lg:gap-12">
           {/* Left Panel - Form */}
           <div className="space-y-6">
-            {/* LinkedIn Connect Card */}
-            <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-6 shadow-xl border border-white/20">
-              <div className="flex items-center gap-4 mb-4">
+            {/* LinkedIn Connect Card (existing) */}
+            { !linkedInUser && ( // Only show connect button if not already connected
+              <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-6 shadow-xl border border-white/20">
+                <div className="flex items-center gap-4 mb-4">
+                  <button
+                    className="flex items-center gap-3 bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white px-6 py-3 rounded-xl font-semibold shadow-lg transition-all duration-300 transform hover:scale-105"
+                    onClick={() => {
+                      window.location.href = "http://localhost:3000/auth/linkedin";
+                    }}
+                    type="button"
+                  >
+                    <Linkedin className="w-5 h-5" />
+                    Connect LinkedIn
+                  </button>
+                  {linkedinLoaded && (
+                    <div className="flex items-center gap-2 text-emerald-600 font-medium">
+                      <CheckCircle className="w-5 h-5" />
+                      Connected successfully!
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* New LinkedIn Sharing Card */}
+            {linkedInUser && (
+              <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-6 shadow-xl border border-white/20">
+                <h3 className="text-xl font-bold text-gray-800 mb-4">Share from MultiPost AI</h3>
+                <textarea
+                  className="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 mb-4 text-gray-800"
+                  rows="4"
+                  value={postMessage}
+                  onChange={(e) => setPostMessage(e.target.value)}
+                  placeholder="Type your message to share..."
+                  disabled={sharingLoading}
+                ></textarea>
                 <button
-                  className="flex items-center gap-3 bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white px-6 py-3 rounded-xl font-semibold shadow-lg transition-all duration-300 transform hover:scale-105"
-                  onClick={() => {
-                    window.location.href = "http://localhost:3000/auth/linkedin";
-                  }}
-                  type="button"
+                  onClick={handleShareLinkedIn}
+                  disabled={!linkedInUser || sharingLoading}
+                  className={`flex items-center gap-2 px-6 py-3 rounded-xl font-semibold shadow-lg transition-all duration-300 ${
+                    !linkedInUser || sharingLoading
+                      ? "bg-gray-400 cursor-not-allowed"
+                      : "bg-blue-600 hover:bg-blue-700 text-white transform hover:scale-105"
+                  }`}
                 >
-                  <Linkedin className="w-5 h-5" />
-                  Connect LinkedIn
+                  {sharingLoading ? (
+                    <>
+                      <svg className="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                      </svg>
+                      Sharing...
+                    </>
+                  ) : (
+                    <>
+                      <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M19 3H5a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2V5a2 2 0 00-2-2zM8.6 15.9H7.1v-6h1.5v6zm1.3-6.8a2.5 2.5 0 01-.1-.8c0-.6.4-.9 1-.9s1 .3 1.1.9c0 .6-.4.9-1.1.9s-1-.3-1-.9zM17 15.9h-1.5v-2.3c0-.6 0-1.4-.8-1.4-.8 0-.9-.6-.9-1.3v-1.9H11v6h1.5v-2.3c0-.6 0-1.4.8-1.4.8 0 .9-.6.9-1.3v-1.9H17v4.6z"></path>
+                      </svg>
+                      Share on LinkedIn
+                    </>
+                  )}
                 </button>
-                {linkedinLoaded && (
-                  <div className="flex items-center gap-2 text-emerald-600 font-medium">
-                    <CheckCircle className="w-5 h-5" />
-                    Connected successfully!
-                  </div>
+                {shareSuccess && (
+                  <p className="text-emerald-600 mt-2 flex items-center gap-1">
+                    <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd"></path></svg>
+                    Posted successfully!
+                  </p>
+                )}
+                {shareError && (
+                  <p className="text-red-600 mt-2 flex items-center gap-1">
+                    <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd"></path></svg>
+                    {shareError}
+                  </p>
                 )}
               </div>
-            </div>
+            )}
 
             {/* Form */}
             <form
@@ -471,9 +657,8 @@ export default function ProfileBuilder() {
                   Full Name *
                 </label>
                 <input
-                  className={`w-full bg-white/50 border rounded-xl px-4 py-3 text-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 ${
-                    validationErrors.name ? "border-red-500" : "border-gray-200"
-                  }`}
+                  className={`w-full bg-white/50 border rounded-xl px-4 py-3 text-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 ${validationErrors.name ? "border-red-500" : "border-gray-200"
+                    }`}
                   name="name"
                   placeholder="Enter your full name"
                   value={form.name}
@@ -494,11 +679,10 @@ export default function ProfileBuilder() {
                   Education / Current Role *
                 </label>
                 <input
-                  className={`w-full bg-white/50 border rounded-xl px-4 py-3 text-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 ${
-                    validationErrors.education
+                  className={`w-full bg-white/50 border rounded-xl px-4 py-3 text-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 ${validationErrors.education
                       ? "border-red-500"
                       : "border-gray-200"
-                  }`}
+                    }`}
                   name="education"
                   placeholder="e.g., Software Engineer at Google"
                   value={form.education}
@@ -520,11 +704,10 @@ export default function ProfileBuilder() {
                 </label>
                 <div className="relative">
                   <div
-                    className={`w-full bg-white/50 border rounded-xl p-3 flex flex-wrap gap-2 min-h-[60px] focus-within:ring-2 focus-within:ring-blue-500 focus-within:border-transparent transition-all duration-200 ${
-                      validationErrors.skills
+                    className={`w-full bg-white/50 border rounded-xl p-3 flex flex-wrap gap-2 min-h-[60px] focus-within:ring-2 focus-within:ring-blue-500 focus-within:border-transparent transition-all duration-200 ${validationErrors.skills
                         ? "border-red-500"
                         : "border-gray-200"
-                    }`}
+                      }`}
                   >
                     {form.skills.map((skill) => (
                       <span
@@ -587,11 +770,10 @@ export default function ProfileBuilder() {
                   Experience *
                 </label>
                 <textarea
-                  className={`w-full bg-white/50 border rounded-xl px-4 py-3 text-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 min-h-[100px] resize-none ${
-                    validationErrors.experience
+                  className={`w-full bg-white/50 border rounded-xl px-4 py-3 text-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 min-h-[100px] resize-none ${validationErrors.experience
                       ? "border-red-500"
                       : "border-gray-200"
-                  }`}
+                    }`}
                   name="experience"
                   placeholder="Describe your work experience and achievements..."
                   value={form.experience}
@@ -612,11 +794,10 @@ export default function ProfileBuilder() {
                   Career Goals *
                 </label>
                 <textarea
-                  className={`w-full bg-white/50 border rounded-xl px-4 py-3 text-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 min-h-[100px] resize-none ${
-                    validationErrors.goals
+                  className={`w-full bg-white/50 border rounded-xl px-4 py-3 text-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 min-h-[100px] resize-none ${validationErrors.goals
                       ? "border-red-500"
                       : "border-gray-200"
-                  }`}
+                    }`}
                   name="goals"
                   placeholder="What are your career aspirations and goals?"
                   value={form.goals}
