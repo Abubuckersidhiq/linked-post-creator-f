@@ -1,6 +1,7 @@
 "use client";
 import { jwtDecode } from "jwt-decode";
 import React, { useState, useRef, useEffect } from "react";
+import Cropper from 'react-easy-crop';
 
 const User = ({ className }) => (
   <svg
@@ -238,6 +239,74 @@ _Posted using MultiPost AI – the open-source AI post creator!_`);
   const [sharingLoading, setSharingLoading] = useState(false);
   const [shareSuccess, setShareSuccess] = useState(false);
   const [shareError, setShareError] = useState("");
+  const [aiPostLoading, setAiPostLoading] = useState(false);
+  const [aiImageLoading, setAiImageLoading] = useState(false);
+  const [aiPostError, setAiPostError] = useState("");
+  const [aiImageError, setAiImageError] = useState("");
+  const [aiImageUrl, setAiImageUrl] = useState("");
+  const [uploadedImage, setUploadedImage] = useState(null);
+  const [showImageModal, setShowImageModal] = useState(false);
+  const [imagePrompt, setImagePrompt] = useState("");
+  const [uploadedImages, setUploadedImages] = useState([]); // Array of URLs
+  const [showImageEditor, setShowImageEditor] = useState(false);
+  const [imageToEdit, setImageToEdit] = useState(null);
+  const [crop, setCrop] = useState({ x: 0, y: 0 });
+  const [zoom, setZoom] = useState(1);
+  const [croppedAreaPixels, setCroppedAreaPixels] = useState(null);
+
+  // Helper to get cropped image as data URL
+  const getCroppedImg = async (imageSrc, croppedAreaPixels) => {
+    const image = await createImage(imageSrc);
+    const canvas = document.createElement('canvas');
+    canvas.width = croppedAreaPixels.width;
+    canvas.height = croppedAreaPixels.height;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(
+      image,
+      croppedAreaPixels.x,
+      croppedAreaPixels.y,
+      croppedAreaPixels.width,
+      croppedAreaPixels.height,
+      0,
+      0,
+      croppedAreaPixels.width,
+      croppedAreaPixels.height
+    );
+    return canvas.toDataURL('image/jpeg');
+  };
+  // Helper to create image
+  function createImage(url) {
+    return new Promise((resolve, reject) => {
+      const img = new window.Image();
+      img.addEventListener('load', () => resolve(img));
+      img.addEventListener('error', error => reject(error));
+      img.setAttribute('crossOrigin', 'anonymous');
+      img.src = url;
+    });
+  }
+
+  // Open image editor for a specific image
+  const openImageEditor = (imgUrl) => {
+    setImageToEdit(imgUrl);
+    setShowImageEditor(true);
+    setCrop({ x: 0, y: 0 });
+    setZoom(1);
+    setCroppedAreaPixels(null);
+  };
+  // Save cropped image
+  const saveCroppedImage = async () => {
+    if (imageToEdit && croppedAreaPixels) {
+      const cropped = await getCroppedImg(imageToEdit, croppedAreaPixels);
+      setUploadedImages((imgs) => imgs.map(img => img === imageToEdit ? cropped : img));
+      setShowImageEditor(false);
+      setImageToEdit(null);
+    }
+  };
+  // Cancel editing
+  const cancelEditImage = () => {
+    setShowImageEditor(false);
+    setImageToEdit(null);
+  };
 
   // Validation function
   const validateForm = () => {
@@ -319,7 +388,7 @@ _Posted using MultiPost AI – the open-source AI post creator!_`);
     }
 
     if (currentIdToken) {
-      try {
+        try {
         const userClaims = jwtDecode(currentIdToken)
         setLinkedInUser(userClaims); // Set the decoded claims
 
@@ -331,7 +400,7 @@ _Posted using MultiPost AI – the open-source AI post creator!_`);
             if (!res.ok) {
               if (res.status === 401) {
                 localStorage.removeItem("linkedin_id_token");
-                setLinkedInUser(null);
+          setLinkedInUser(null);
                 setLinkedinLoaded(false);
                 setError("Your LinkedIn session has expired. Please reconnect.");
               }
@@ -339,16 +408,16 @@ _Posted using MultiPost AI – the open-source AI post creator!_`);
             }
             return res.json();
           })
-          .then((profile) => {
+        .then((profile) => {
             setLinkedInProfile(profile); // Save full profile for picture, etc.
-            setForm((f) => ({
-              ...f,
+          setForm((f) => ({
+            ...f,
               name: profile.fullName || [profile.firstName, profile.lastName].filter(Boolean).join(" ") || profile.email || "",
               education: f.education || "", // Education is not available from LinkedIn OIDC, keep as is
-            }));
-            setLinkedinLoaded(true);
+          }));
+          setLinkedinLoaded(true);
             setError("");
-          })
+        })
           .catch((err) => {
             console.error("Error fetching LinkedIn profile from backend:", err);
             if (!error) {
@@ -428,15 +497,15 @@ _Posted using MultiPost AI – the open-source AI post creator!_`);
     setError("");
 
     try {
-      const res = await fetch("http://localhost:3000/profile", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          ...form,
-          skills: form.skills.join(", "),
-        }),
-      });
-      const data = await res.json();
+           const res = await fetch("http://localhost:3000/profile", {
+             method: "POST",
+             headers: { "Content-Type": "application/json" },
+             body: JSON.stringify({
+               ...form,
+               skills: form.skills.join(", "),
+             }),
+           });
+           const data = await res.json();
 
       setSummary(data.summary);
     } catch (err) {
@@ -512,6 +581,72 @@ _Posted using MultiPost AI – the open-source AI post creator!_`);
     }
   };
 
+  // Handle AI post suggestion (use textarea content as context)
+  const handleAIPost = async () => {
+    const context = postMessage.trim();
+    const topic = context || prompt("What do you want to post about?");
+    if (!topic) return;
+    setAiPostLoading(true);
+    setAiPostError("");
+    try {
+      const res = await fetch("http://localhost:3000/api/generate-post", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ topic }),
+      });
+      if (!res.ok) throw new Error("Failed to generate post.");
+      const data = await res.json();
+      setPostMessage(data.post);
+    } catch (err) {
+      setAiPostError("AI suggestion failed. Try again.");
+    } finally {
+      setAiPostLoading(false);
+    }
+  };
+
+  // Handle AI image generation (open modal)
+  const handleAIImage = () => {
+    setImagePrompt("");
+    setShowImageModal(true);
+  };
+  const confirmAIImage = async () => {
+    if (!imagePrompt.trim()) return;
+    setAiImageLoading(true);
+    setAiImageError("");
+    try {
+      const res = await fetch("http://localhost:3000/api/generate-image", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt: imagePrompt }),
+      });
+      if (!res.ok) throw new Error("Failed to generate image.");
+      const data = await res.json();
+      setAiImageUrl(data.imageUrl);
+      setUploadedImages((imgs) => [...imgs, data.imageUrl]);
+      setShowImageModal(false);
+    } catch (err) {
+      setAiImageError("AI image generation failed. Try again.");
+    } finally {
+      setAiImageLoading(false);
+    }
+  };
+  const cancelAIImage = () => {
+    setShowImageModal(false);
+    setImagePrompt("");
+  };
+
+  // Handle multiple image upload
+  const handleImageUpload = (e) => {
+    const files = Array.from(e.target.files);
+    const urls = files.map(file => URL.createObjectURL(file));
+    setUploadedImages((imgs) => [...imgs, ...urls]);
+    setAiImageUrl(""); // Clear single AI image if any
+  };
+  // Remove an image
+  const removeImage = (url) => {
+    setUploadedImages((imgs) => imgs.filter(img => img !== url));
+  };
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-100 relative overflow-hidden">
       {/* Background decoration */}
@@ -529,12 +664,12 @@ _Posted using MultiPost AI – the open-source AI post creator!_`);
               <Linkedin className="w-8 h-8 text-white" />
             </div>
             <h1 className="text-4xl md:text-5xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
-              LinkedIn Profile Builder
+              MultiPost AI
             </h1>
           </div>
           <p className="text-xl text-gray-600 max-w-2xl mx-auto leading-relaxed">
-            Create a compelling LinkedIn profile that stands out. Get discovered
-            by recruiters and grow your professional network.
+            Create, optimize, and share professional posts across platforms.<br/>
+            Build your brand and grow your network with AI-powered content.
           </p>
           {/* Show profile picture and greeting if connected */}
           {linkedInUser && linkedInProfile && linkedInProfile.profilePicture && (
@@ -568,46 +703,172 @@ _Posted using MultiPost AI – the open-source AI post creator!_`);
         <div className="grid lg:grid-cols-2 gap-8 lg:gap-12">
           {/* Left Panel - Form */}
           <div className="space-y-6">
-            {/* LinkedIn Connect Card (existing) */}
-            { !linkedInUser && ( // Only show connect button if not already connected
-              <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-6 shadow-xl border border-white/20">
-                <div className="flex items-center gap-4 mb-4">
-                  <button
-                    className="flex items-center gap-3 bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white px-6 py-3 rounded-xl font-semibold shadow-lg transition-all duration-300 transform hover:scale-105"
-                    onClick={() => {
-                      window.location.href = "http://localhost:3000/auth/linkedin";
-                    }}
-                    type="button"
-                  >
-                    <Linkedin className="w-5 h-5" />
-                    Connect LinkedIn
-                  </button>
-                  {linkedinLoaded && (
-                    <div className="flex items-center gap-2 text-emerald-600 font-medium">
-                      <CheckCircle className="w-5 h-5" />
-                      Connected successfully!
+            {/* --- New MultiPost AI Post Creation Card --- */}
+            {linkedInUser && (
+              <div className="bg-white/90 backdrop-blur-sm rounded-3xl p-8 shadow-2xl border border-blue-100 mb-8 w-full">
+                <h3 className="text-3xl font-extrabold text-blue-700 mb-1 flex items-center gap-2">
+                  <Sparkles className="w-7 h-7 text-purple-500" /> Create a Post with MultiPost AI
+                </h3>
+                <p className="text-gray-600 mb-6 text-base">Let AI help you write and generate images, or upload your own. Preview your post before sharing!</p>
+                {/* Step 1: Write your post */}
+                <div className="mb-6">
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className="text-blue-600 font-bold">1.</span>
+                    <label className="text-lg font-semibold">Write your post</label>
+                  </div>
+                  <div className="relative">
+                    <textarea
+                      className="w-full p-4 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-800 mb-2 text-base transition shadow-sm"
+                      rows="5"
+                      value={postMessage}
+                      onChange={e => setPostMessage(e.target.value)}
+                      placeholder="Write your post here..."
+                      disabled={sharingLoading}
+                    ></textarea>
+                    <button
+                      type="button"
+                      onClick={handleAIPost}
+                      disabled={aiPostLoading}
+                      className="absolute right-3 bottom-3 flex items-center gap-1 bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 rounded-lg font-medium shadow transition disabled:opacity-50 text-sm"
+                      title="Let AI suggest a post for you"
+                    >
+                      <Sparkles className="w-4 h-4" />
+                      {aiPostLoading ? "Generating..." : "Help me write"}
+                    </button>
+                  </div>
+                  {aiPostError && <div className="text-red-600 text-sm mt-1 font-semibold">{aiPostError}</div>}
+                </div>
+                {/* Step 2: Add an image */}
+                <div className="mb-6">
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className="text-blue-600 font-bold">2.</span>
+                    <label className="text-lg font-semibold">Add an image <span className="text-gray-400 font-normal">(optional)</span></label>
+                  </div>
+                  <div className="flex gap-2 mb-2">
+                    <button
+                      type="button"
+                      onClick={handleAIImage}
+                      disabled={aiImageLoading}
+                      className="flex items-center gap-1 bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg font-medium shadow transition disabled:opacity-50 text-sm"
+                      title="Generate an image with AI"
+                    >
+                      <Sparkles className="w-4 h-4" />
+                      {aiImageLoading ? "Generating..." : "AI Image"}
+                    </button>
+                    <label className="flex items-center gap-1 bg-gray-200 hover:bg-gray-300 text-gray-800 px-4 py-2 rounded-lg font-medium shadow cursor-pointer transition text-sm">
+                      <Copy className="w-4 h-4" /> Upload Images
+                      <input
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        onChange={handleImageUpload}
+                        multiple
+                        disabled={aiImageLoading}
+                      />
+                    </label>
+                  </div>
+                  {aiImageError && <div className="text-red-600 text-sm mt-1 font-semibold">{aiImageError}</div>}
+                  {/* Image Preview */}
+                  <div className={`mt-3 flex flex-wrap gap-4 items-center justify-start min-h-[120px] rounded-xl border-2 ${uploadedImages.length ? 'border-gray-300' : 'border-dashed border-blue-200 bg-blue-50'}`}>
+                    {uploadedImages.length ? (
+                      uploadedImages.map((img, idx) => (
+                        <div key={img} className="relative group">
+                          <img
+                            src={img}
+                            alt={`Post visual ${idx+1}`}
+                            className="max-h-32 rounded-lg border border-gray-300 shadow"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => removeImage(img)}
+                            className="absolute top-1 right-1 bg-red-600 text-white rounded-full p-1 opacity-80 hover:opacity-100 transition"
+                            title="Remove image"
+                          >
+                            ×
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => openImageEditor(img)}
+                            className="absolute bottom-1 right-1 bg-blue-600 text-white rounded-full p-1 opacity-80 hover:opacity-100 transition"
+                            title="Edit image"
+                          >
+                            ✎
+                          </button>
+                        </div>
+                      ))
+                    ) : (
+                      <span className="text-gray-400 text-sm py-8">No image selected or generated yet</span>
+                    )}
+                  </div>
+                  {/* Image Cropper Modal */}
+                  {showImageEditor && (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-40">
+                      <div className="bg-white rounded-2xl shadow-2xl p-8 w-full max-w-md relative flex flex-col items-center">
+                        <h4 className="text-xl font-bold mb-4 text-blue-700 flex items-center gap-2">Crop Image</h4>
+                        <div className="relative w-64 h-64 bg-gray-100 rounded-lg overflow-hidden mb-4">
+                          <Cropper
+                            image={imageToEdit}
+                            crop={crop}
+                            zoom={zoom}
+                            aspect={1}
+                            onCropChange={setCrop}
+                            onZoomChange={setZoom}
+                            onCropComplete={(_, croppedAreaPixels) => setCroppedAreaPixels(croppedAreaPixels)}
+                          />
+                        </div>
+                        <div className="flex gap-3 mt-2 items-center w-full">
+                          <label className="flex items-center gap-1 text-sm">
+                            Zoom
+                            <input
+                              type="range"
+                              min="1"
+                              max="3"
+                              step="0.01"
+                              value={zoom}
+                              onChange={e => setZoom(parseFloat(e.target.value))}
+                            />
+                          </label>
+                        </div>
+                        <div className="flex gap-3 justify-end mt-6 w-full">
+                          <button
+                            onClick={cancelEditImage}
+                            className="px-4 py-2 rounded-lg bg-gray-200 hover:bg-gray-300 text-gray-700 font-medium"
+                          >Cancel</button>
+                          <button
+                            onClick={saveCroppedImage}
+                            className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold shadow"
+                          >Save</button>
+                        </div>
+                      </div>
                     </div>
                   )}
                 </div>
-              </div>
-            )}
-
-            {/* New LinkedIn Sharing Card */}
-            {linkedInUser && (
-              <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-6 shadow-xl border border-white/20">
-                <h3 className="text-xl font-bold text-gray-800 mb-4">Share from MultiPost AI</h3>
-                <textarea
-                  className="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 mb-4 text-gray-800"
-                  rows="4"
-                  value={postMessage}
-                  onChange={(e) => setPostMessage(e.target.value)}
-                  placeholder="Type your message to share..."
-                  disabled={sharingLoading}
-                ></textarea>
+                {/* Step 3: Preview & Share */}
+                <div className="mb-6">
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className="text-blue-600 font-bold">3.</span>
+                    <label className="text-lg font-semibold">Preview & Share</label>
+                  </div>
+                  <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 text-gray-800 whitespace-pre-line min-h-[80px] text-base shadow-sm">
+                    {postMessage}
+                  </div>
+                  {uploadedImages.length > 0 && (
+                    <div className="mt-2 flex flex-wrap gap-4 items-center">
+                      {uploadedImages.map((img, idx) => (
+                        <img
+                          key={img}
+                          src={img}
+                          alt={`Preview visual ${idx+1}`}
+                          className="max-h-24 rounded-lg border border-gray-200 shadow"
+                        />
+                      ))}
+                    </div>
+                  )}
+                </div>
                 <button
                   onClick={handleShareLinkedIn}
                   disabled={!linkedInUser || sharingLoading}
-                  className={`flex items-center gap-2 px-6 py-3 rounded-xl font-semibold shadow-lg transition-all duration-300 ${
+                  className={`w-full flex items-center justify-center gap-2 px-6 py-4 rounded-xl font-bold shadow-lg transition-all duration-300 text-lg mt-2 ${
                     !linkedInUser || sharingLoading
                       ? "bg-gray-400 cursor-not-allowed"
                       : "bg-blue-600 hover:bg-blue-700 text-white transform hover:scale-105"
@@ -615,303 +876,56 @@ _Posted using MultiPost AI – the open-source AI post creator!_`);
                 >
                   {sharingLoading ? (
                     <>
-                      <svg className="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                      </svg>
+                      <Loader2 className="w-6 h-6 animate-spin" />
                       Sharing...
                     </>
                   ) : (
                     <>
-                      <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                        <path d="M19 3H5a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2V5a2 2 0 00-2-2zM8.6 15.9H7.1v-6h1.5v6zm1.3-6.8a2.5 2.5 0 01-.1-.8c0-.6.4-.9 1-.9s1 .3 1.1.9c0 .6-.4.9-1.1.9s-1-.3-1-.9zM17 15.9h-1.5v-2.3c0-.6 0-1.4-.8-1.4-.8 0-.9-.6-.9-1.3v-1.9H11v6h1.5v-2.3c0-.6 0-1.4.8-1.4.8 0 .9-.6.9-1.3v-1.9H17v4.6z"></path>
-                      </svg>
+                      <Linkedin className="w-6 h-6" />
                       Share on LinkedIn
                     </>
                   )}
                 </button>
                 {shareSuccess && (
-                  <p className="text-emerald-600 mt-2 flex items-center gap-1">
-                    <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd"></path></svg>
+                  <div className="text-emerald-700 mt-4 flex items-center gap-2 font-semibold text-base bg-emerald-50 border border-emerald-200 rounded-lg p-3">
+                    <CheckCircle className="w-5 h-5" />
                     Posted successfully!
-                  </p>
+                  </div>
                 )}
                 {shareError && (
-                  <p className="text-red-600 mt-2 flex items-center gap-1">
-                    <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd"></path></svg>
+                  <div className="text-red-700 mt-4 flex items-center gap-2 font-semibold text-base bg-red-50 border border-red-200 rounded-lg p-3">
+                    <AlertCircle className="w-5 h-5" />
                     {shareError}
-                  </p>
+                  </div>
                 )}
               </div>
             )}
 
-            {/* Form */}
-            <form
-              onSubmit={handleSubmit}
-              className="bg-white/80 backdrop-blur-sm rounded-2xl p-8 shadow-xl border border-white/20 space-y-6"
-            >
-              {/* Name Field */}
-              <div className="space-y-2">
-                <label className="flex items-center gap-2 text-lg font-semibold text-gray-700">
-                  <User className="w-5 h-5 text-blue-600" />
-                  Full Name *
-                </label>
-                <input
-                  className={`w-full bg-white/50 border rounded-xl px-4 py-3 text-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 ${validationErrors.name ? "border-red-500" : "border-gray-200"
-                    }`}
-                  name="name"
-                  placeholder="Enter your full name"
-                  value={form.name}
-                  onChange={handleChange}
-                />
-                {validationErrors.name && (
-                  <div className="flex items-center gap-2 text-red-600 text-sm mt-1">
-                    <AlertCircle className="w-4 h-4" />
-                    {validationErrors.name}
+            {/* LinkedIn Connect Card (existing) */}
+            { !linkedInUser && ( // Only show connect button if not already connected
+            <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-6 shadow-xl border border-white/20">
+              <div className="flex items-center gap-4 mb-4">
+                <button
+                  className="flex items-center gap-3 bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white px-6 py-3 rounded-xl font-semibold shadow-lg transition-all duration-300 transform hover:scale-105"
+                  onClick={() => {
+                    window.location.href = "http://localhost:3000/auth/linkedin";
+                  }}
+                  type="button"
+                >
+                  <Linkedin className="w-5 h-5" />
+                  Connect LinkedIn
+                </button>
+                {linkedinLoaded && (
+                  <div className="flex items-center gap-2 text-emerald-600 font-medium">
+                    <CheckCircle className="w-5 h-5" />
+                    Connected successfully!
                   </div>
                 )}
-              </div>
-
-              {/* Education Field */}
-              <div className="space-y-2">
-                <label className="flex items-center gap-2 text-lg font-semibold text-gray-700">
-                  <Award className="w-5 h-5 text-purple-600" />
-                  Education / Current Role *
-                </label>
-                <input
-                  className={`w-full bg-white/50 border rounded-xl px-4 py-3 text-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 ${validationErrors.education
-                      ? "border-red-500"
-                      : "border-gray-200"
-                    }`}
-                  name="education"
-                  placeholder="e.g., Software Engineer at Google"
-                  value={form.education}
-                  onChange={handleChange}
-                />
-                {validationErrors.education && (
-                  <div className="flex items-center gap-2 text-red-600 text-sm mt-1">
-                    <AlertCircle className="w-4 h-4" />
-                    {validationErrors.education}
-                  </div>
-                )}
-              </div>
-
-              {/* Skills Field */}
-              <div className="space-y-2 relative">
-                <label className="flex items-center gap-2 text-lg font-semibold text-gray-700">
-                  <Sparkles className="w-5 h-5 text-emerald-600" />
-                  Skills * (max 20)
-                </label>
-                <div className="relative">
-                  <div
-                    className={`w-full bg-white/50 border rounded-xl p-3 flex flex-wrap gap-2 min-h-[60px] focus-within:ring-2 focus-within:ring-blue-500 focus-within:border-transparent transition-all duration-200 ${validationErrors.skills
-                        ? "border-red-500"
-                        : "border-gray-200"
-                      }`}
-                  >
-                    {form.skills.map((skill) => (
-                      <span
-                        key={skill}
-                        className="flex items-center bg-gradient-to-r from-blue-100 to-blue-200 text-blue-800 px-3 py-1.5 rounded-full text-sm font-medium shadow-sm border border-blue-300"
-                      >
-                        {skill}
-                        <button
-                          type="button"
-                          className="ml-2 text-blue-600 hover:text-red-500 focus:outline-none transition-colors"
-                          onClick={() => removeSkill(skill)}
-                        >
-                          ×
-                        </button>
-                      </span>
-                    ))}
-                    <input
-                      ref={skillInputRef}
-                      className="flex-1 min-w-[120px] bg-transparent border-none outline-none text-lg p-1"
-                      type="text"
-                      placeholder={
-                        form.skills.length === 0
-                          ? "Type skills (e.g., JavaScript, Python)..."
-                          : "Add more skills..."
-                      }
-                      value={skillInput}
-                      onChange={handleSkillInputChange}
-                      onKeyDown={handleSkillKeyDown}
-                    />
-                  </div>
-                  {skillSuggestions.length > 0 && (
-                    <div className="absolute top-full left-0 right-0 bg-white border border-gray-200 rounded-xl shadow-lg mt-1 z-30 max-h-48 overflow-y-auto">
-                      {skillSuggestions.map((skill) => (
-                        <div
-                          key={skill}
-                          className="px-4 py-3 cursor-pointer hover:bg-blue-50 text-gray-700 border-b border-gray-100 last:border-b-0 transition-colors"
-                          onClick={() => addSkill(skill)}
-                        >
-                          {skill}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-                {validationErrors.skills && (
-                  <div className="flex items-center gap-2 text-red-600 text-sm mt-1">
-                    <AlertCircle className="w-4 h-4" />
-                    {validationErrors.skills}
-                  </div>
-                )}
-                <div className="text-sm text-gray-500">
-                  {form.skills.length}/20 skills added
-                </div>
-              </div>
-
-              {/* Experience Field */}
-              <div className="space-y-2">
-                <label className="flex items-center gap-2 text-lg font-semibold text-gray-700">
-                  <Briefcase className="w-5 h-5 text-orange-600" />
-                  Experience *
-                </label>
-                <textarea
-                  className={`w-full bg-white/50 border rounded-xl px-4 py-3 text-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 min-h-[100px] resize-none ${validationErrors.experience
-                      ? "border-red-500"
-                      : "border-gray-200"
-                    }`}
-                  name="experience"
-                  placeholder="Describe your work experience and achievements..."
-                  value={form.experience}
-                  onChange={handleChange}
-                />
-                {validationErrors.experience && (
-                  <div className="flex items-center gap-2 text-red-600 text-sm mt-1">
-                    <AlertCircle className="w-4 h-4" />
-                    {validationErrors.experience}
-                  </div>
-                )}
-              </div>
-
-              {/* Goals Field */}
-              <div className="space-y-2">
-                <label className="flex items-center gap-2 text-lg font-semibold text-gray-700">
-                  <Target className="w-5 h-5 text-red-600" />
-                  Career Goals *
-                </label>
-                <textarea
-                  className={`w-full bg-white/50 border rounded-xl px-4 py-3 text-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 min-h-[100px] resize-none ${validationErrors.goals
-                      ? "border-red-500"
-                      : "border-gray-200"
-                    }`}
-                  name="goals"
-                  placeholder="What are your career aspirations and goals?"
-                  value={form.goals}
-                  onChange={handleChange}
-                />
-                {validationErrors.goals && (
-                  <div className="flex items-center gap-2 text-red-600 text-sm mt-1">
-                    <AlertCircle className="w-4 h-4" />
-                    {validationErrors.goals}
-                  </div>
-                )}
-              </div>
-
-              {/* Submit Button */}
-              <button
-                type="submit"
-                className="w-full bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white text-xl font-bold px-6 py-4 rounded-xl shadow-lg transition-all duration-300 transform hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none flex items-center justify-center gap-3"
-                disabled={loading}
-              >
-                {loading ? (
-                  <>
-                    <Loader2 className="w-6 h-6 animate-spin" />
-                    Generating Your Profile...
-                  </>
-                ) : (
-                  <>
-                    <Sparkles className="w-6 h-6" />
-                    Generate LinkedIn Profile
-                  </>
-                )}
-              </button>
-            </form>
-
-            {error && (
-              <div className="bg-red-50 border border-red-200 rounded-xl p-4 text-red-700 shadow-sm">
-                {error}
-              </div>
-            )}
-          </div>
-
-          {/* Right Panel - Results */}
-          <div className="space-y-6">
-            {summary && (
-              <div className="bg-white/90 backdrop-blur-sm rounded-2xl shadow-xl border border-white/20 overflow-hidden">
-                <div className="bg-gradient-to-r from-blue-600 to-purple-600 p-6">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                      <div className="p-2 bg-white/20 rounded-lg">
-                        <Linkedin className="w-6 h-6 text-white" />
-                      </div>
-                      <h2 className="text-2xl font-bold text-white">
-                        Your LinkedIn Profile
-                      </h2>
-                    </div>
-                    <button
-                      onClick={copyToClipboard}
-                      className="flex items-center gap-2 bg-white/20 hover:bg-white/30 text-white px-4 py-2 rounded-lg transition-all duration-200 font-medium"
-                    >
-                      {copied ? (
-                        <>
-                          <CheckCircle className="w-5 h-5" />
-                          Copied!
-                        </>
-                      ) : (
-                        <>
-                          <Copy className="w-5 h-5" />
-                          Copy
-                        </>
-                      )}
-                    </button>
-                  </div>
-                </div>
-                <div className="p-8 max-h-[600px] overflow-y-auto">
-                  <div className="text-lg text-gray-800 whitespace-pre-line leading-relaxed font-medium">
-                    {summary}
-                  </div>
                 </div>
               </div>
             )}
 
-            {!summary && !loading && (
-              <div className="bg-white/60 backdrop-blur-sm rounded-2xl p-12 shadow-xl border border-white/20 text-center">
-                <div className="mb-6">
-                  <div className="w-20 h-20 bg-gradient-to-r from-blue-600 to-purple-600 rounded-full flex items-center justify-center mx-auto mb-4">
-                    <Sparkles className="w-10 h-10 text-white" />
-                  </div>
-                  <h3 className="text-2xl font-bold text-gray-800 mb-2">
-                    Ready to Build Your Profile?
-                  </h3>
-                  <p className="text-gray-600 text-lg">
-                    Fill out the form to generate a professional LinkedIn
-                    profile summary that gets you noticed.
-                  </p>
-                </div>
-                <div className="grid grid-cols-2 gap-4 text-sm text-gray-500">
-                  <div className="flex items-center gap-2">
-                    <CheckCircle className="w-4 h-4 text-emerald-500" />
-                    AI-Powered Content
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <CheckCircle className="w-4 h-4 text-emerald-500" />
-                    Professional Format
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <CheckCircle className="w-4 h-4 text-emerald-500" />
-                    Recruiter-Friendly
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <CheckCircle className="w-4 h-4 text-emerald-500" />
-                    Instant Results
-                  </div>
-                </div>
-              </div>
-            )}
+            
           </div>
         </div>
       </div>
