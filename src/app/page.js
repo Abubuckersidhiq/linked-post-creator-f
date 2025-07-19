@@ -1,7 +1,7 @@
-import ProfileBuilder from "@/components/ProfileBuilder";
+import MultiPostDashboard from "@/components/dashboard/MultiPostDashboard";
 
 export default function Home() {
   return (
-    <ProfileBuilder />
+    <MultiPostDashboard />
   );
 }
